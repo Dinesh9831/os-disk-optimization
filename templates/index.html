@@ -1,0 +1,241 @@
+<!DOCTYPE html>
+<html lang="en">
+
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Disk Scheduling Simulator</title>
+    <link rel="stylesheet" href="{{ url_for('static', filename='style.css') }}">
+    <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+</head>
+
+<body>
+
+    <div class="container">
+        <h1>Disk Scheduling Simulator</h1>
+
+        <form id="simulatorForm">
+            <div class="form-group">
+                <label>Request Sequence</label>
+                <input type="text" name="requests" placeholder="e.g. 98, 183, 37, 122, 14, 124, 65, 67" required>
+            </div>
+
+            <div class="form-group">
+                <label>Initial Head Position</label>
+                <input type="number" name="head" placeholder="e.g. 53" required>
+            </div>
+
+            <div class="form-group">
+                <label>Disk Size</label>
+                <input type="number" name="disk_size" placeholder="e.g. 200" required>
+            </div>
+
+            <div class="form-group">
+                <label>Scheduling Algorithm</label>
+                <select name="algorithm">
+                    <option value="FCFS">FCFS</option>
+                    <option value="SSTF">SSTF</option>
+                    <option value="SCAN">SCAN</option>
+                    <option value="CSCAN">C-SCAN</option>
+                    <option value="LOOK">LOOK</option>
+                    <option value="CLOOK">C-LOOK</option>
+                </select>
+            </div>
+
+            <div class="form-group">
+                <label>Direction (for SCAN / LOOK)</label>
+                <select name="direction">
+                    <option value="up">Up</option>
+                    <option value="down">Down</option>
+                </select>
+            </div>
+
+            <button type="submit" id="submitBtn">Run Simulation</button>
+        </form>
+
+        <!-- Loader -->
+        <div class="loader" id="loader">
+            <div class="spinner"></div>
+        </div>
+
+        <!-- Results (Injected via JS) -->
+        <div class="result-container" id="resultContainer">
+
+            <div class="metrics">
+                <div class="metric-card">
+                    <h3>Total Seek Movement</h3>
+                    <p id="totalSeek">0</p>
+                </div>
+                <div class="metric-card">
+                    <h3>Average Seek Time</h3>
+                    <p id="avgSeek">0</p>
+                </div>
+                <div class="metric-card">
+                    <h3>Starvation Risk</h3>
+                    <p id="starvationRisk">-</p>
+                </div>
+            </div>
+
+            <div class="sequence-box">
+                <h3>Seek Sequence</h3>
+                <p id="seekSequence">-</p>
+            </div>
+
+
+            <div class="graph" id="graphContainer" style="display: none;">
+                <div style="display:flex;justify-content:space-between;align-items:center; margin-bottom:12px;">
+                    <div>
+                        <h3 style="margin:0;color:#c9d1d9;font-size:15px;">Disk Head Movement</h3>
+                        <p style="margin:4px 0 0 0;color:#8b949e;font-size:12px;">Interactive timeline of cylinder seek
+                            operations.</p>
+                    </div>
+                    <span style="font-size:12px;color:#8b949e;font-weight:600;">Hover points for exact cylinder</span>
+                </div>
+                <canvas id="diskChart"></canvas>
+            </div>
+
+        </div>
+
+    </div>
+
+    <script>
+        // Global variables
+        let diskChart = null;
+
+        document.getElementById('simulatorForm').addEventListener('submit', function (e) {
+            e.preventDefault();
+
+            const submitBtn = document.getElementById('submitBtn');
+            const loader = document.getElementById('loader');
+            const resultContainer = document.getElementById('resultContainer');
+
+            submitBtn.disabled = true;
+            submitBtn.textContent = 'Simulating...';
+            loader.style.display = 'block';
+            resultContainer.style.display = 'none';
+
+            const formData = new FormData(this);
+
+            fetch('/', {
+                method: 'POST',
+                headers: { 'Accept': 'application/json' },
+                body: formData
+            })
+                .then(response => response.json())
+                .then(data => {
+                    loader.style.display = 'none';
+                    resultContainer.style.display = 'block';
+
+                    document.getElementById('totalSeek').textContent = data.result.seek;
+                    document.getElementById('avgSeek').textContent = data.result.avg_seek;
+                    document.getElementById('seekSequence').textContent = data.result.sequence.join(' → ');
+
+                    // Update Starvation Risk
+                    const riskEl = document.getElementById('starvationRisk');
+                    riskEl.textContent = data.result.starvation_risk;
+                    riskEl.style.color = '#e6edf3'; // Reset
+
+                    if (data.result.starvation_risk === 'High') {
+                        riskEl.style.color = '#ff6b6b';
+                        if (data.result.starved_items && data.result.starved_items.length > 0) {
+                            riskEl.setAttribute('title', 'Delayed requests: ' + data.result.starved_items.join(', '));
+                        }
+                    } else if (data.result.starvation_risk === 'Low') {
+                        riskEl.style.color = '#f1c40f';
+                    } else if (data.result.starvation_risk === 'None') {
+                        riskEl.style.color = '#2ea043';
+                    }
+
+                    const sequence = data.result.sequence;
+                    const labels = sequence.map((_, index) => `Step ${index}`);
+
+
+                    document.getElementById('graphContainer').style.display = 'block';
+                    const ctx = document.getElementById('diskChart').getContext('2d');
+
+                    if (diskChart) {
+                        diskChart.destroy();
+                    }
+
+                    diskChart = new Chart(ctx, {
+                        type: 'line',
+                        data: {
+                            labels: labels,
+                            datasets: [{
+                                label: 'Head Position',
+                                data: sequence,
+                                borderColor: '#58a6ff',
+                                backgroundColor: 'rgba(88, 166, 255, 0.22)',
+                                borderWidth: 3,
+                                pointRadius: 6,
+                                pointHoverRadius: 9,
+                                pointHoverBorderWidth: 3,
+                                pointBackgroundColor: '#ffffff',
+                                pointBorderColor: '#0f4dbc',
+                                pointHoverBackgroundColor: '#58a6ff',
+                                pointHoverBorderColor: '#ffffff',
+                                tension: 0.22,
+                                fill: true,
+                                segment: {
+                                    borderColor: ctx => {
+                                        const idx = ctx.p0DataIndex;
+                                        return idx % 2 === 0 ? '#58a6ff' : '#96d4ff';
+                                    }
+                                }
+                            }]
+                        },
+                        options: {
+                            responsive: true,
+                            maintainAspectRatio: false,
+                            animation: { duration: 650, easing: 'easeOutQuart' },
+                            interaction: { mode: 'nearest', intersect: false },
+                            plugins: {
+                                legend: {
+                                    align: 'end',
+                                    labels: { color: '#c9d1d9', font: { size: 12 } },
+                                },
+                                tooltip: {
+                                    backgroundColor: 'rgba(15, 23, 42, 0.95)',
+                                    borderColor: '#8b949e',
+                                    borderWidth: 1,
+                                    titleFont: { size: 13, weight: '700' },
+                                    bodyFont: { size: 13 },
+                                    callbacks: {
+                                        title: items => `Step ${items[0].parsed.x}`,
+                                        label: context => [`Cylinder: ${context.parsed.y}`, `Algorithm: ${document.querySelector('select[name="algorithm"]').value}`]
+                                    }
+                                }
+                            },
+                            scales: {
+                                x: {
+                                    display: true,
+                                    title: { display: true, text: 'Sequence Step', color: '#9ea7b3', font: { size: 12 } },
+                                    ticks: { color: '#c9d1d9' },
+                                    grid: { display: false }
+                                },
+                                y: {
+                                    display: true,
+                                    title: { display: true, text: 'Cylinder', color: '#9ea7b3', font: { size: 12 } },
+                                    ticks: { color: '#c9d1d9' },
+                                    grid: { color: 'rgba(255,255,255,0.1)' }
+                                }
+                            }
+                        }
+                    });
+                })
+                .catch(err => {
+                    console.error(err);
+                    alert('An error occurred while running simulation.');
+                    loader.style.display = 'none';
+                })
+                .finally(() => {
+                    submitBtn.disabled = false;
+                    submitBtn.textContent = 'Run Simulation';
+                });
+        });
+
+    </script>
+
+</body>
+
+</html>
